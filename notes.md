@@ -21,6 +21,14 @@
 - Of type A and type A only
 - No type hierarchy is inherited
 
+
+## Strictness and laziness
+
+- ```def func[A](x: => A): A = x + x``` - x is non-strict argument meaning it gets evaluated every time
+it is called in the body of the function and not earlier.
+- ```def func[A](x: => A): A = {lazy val y = x; x + x}``` - use ```lazy``` keyword to created things evaluated
+in a lazy manner - only once and reused if necessary.
+
 ## Syntax
 
 - Functions accepting a single argument may be called with braces instead
