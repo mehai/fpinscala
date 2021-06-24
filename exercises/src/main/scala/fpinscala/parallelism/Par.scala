@@ -29,10 +29,29 @@ object Par {
       def call = a(es).get
     })
 
-  def map[A,B](pa: Par[A])(f: A => B): Par[B] = 
+  def lazyUnit[A](a: => A): Par[A] = fork(unit(a))
+
+  def asyncF[A, B](f: A => B): A => Par[B] = a => lazyUnit(f(a))
+
+  def map[A,B](pa: Par[A])(f: A => B): Par[B] =
     map2(pa, unit(()))((a,_) => f(a))
 
-  def sortPar(parList: Par[List[Int]]) = map(parList)(_.sorted)
+  def sortPar(parList: Par[List[Int]]): Par[List[Int]] = map(parList)(_.sorted)
+
+  def parMap[A, B](ps: List[A])(f: A => B): Par[List[B]] = fork {
+    val l = ps.map(asyncF(f))
+    sequence(l)
+  }
+
+  def sequence[A](ps: List[Par[A]]): Par[List[A]] = ps match {
+    case Nil => unit(Nil)
+    case h :: t => map2(h, fork(sequence(t)))(_ :: _)
+  }
+
+  def parFilter[A](as: List[A])(f: A => Boolean): Par[List[A]] = {
+    val pars: List[Par[List[A]]] = as map (asyncF((a: A) => if (f(a)) List(a) else List()))
+    map(sequence(pars))(_.flatten)
+  }
 
   def equal[A](e: ExecutorService)(p: Par[A], p2: Par[A]): Boolean = 
     p(e).get == p2(e).get
@@ -64,4 +83,11 @@ object Examples {
       sum(l) + sum(r) // Recursively sum both halves and add the results together.
     }
 
+  def max(ints: IndexedSeq[Int]): Par[Int] =
+    if (ints.size <= 1)
+      Par.unit[Int](ints.headOption getOrElse Int.MinValue)
+    else {
+      val (l,r) = ints.splitAt(ints.length/2)
+      Par.unit(Par.map2(Par.fork(max(l)), Par.fork(max(r)))(_ max _))
+    }
 }
