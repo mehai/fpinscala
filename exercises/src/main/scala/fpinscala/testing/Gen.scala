@@ -3,10 +3,11 @@ package fpinscala.testing
 import fpinscala.laziness.Stream
 import fpinscala.state._
 import fpinscala.parallelism._
-import fpinscala.parallelism.Par.Par
+import fpinscala.parallelism.Par.{Par, equal}
 import Gen._
 import Prop._
-import java.util.concurrent.{Executors,ExecutorService}
+
+import java.util.concurrent.{ExecutorService, Executors}
 
 /*
 The library developed in this chapter goes through several iterations. This file is just the
@@ -16,7 +17,7 @@ shell, which you can fill in and modify while working through the chapter.
 case class Prop(run: (MaxSize, TestCases, RNG) => Result) {
   def &&(p: Prop): Prop = Prop {(ms, n, rng) =>
     run(ms, n, rng) match {
-      case Passed => p.run(ms, n, rng)
+      case Passed | Proved => p.run(ms, n, rng)
       case x => x
     }
   }
@@ -54,6 +55,14 @@ object Prop {
     def isFalsified: Boolean = true
   }
 
+  case object Proved extends Result {
+    def isFalsified: Boolean = false
+  }
+
+  def check(p: => Boolean): Prop = Prop { (_, _, _) =>
+    if (p) Passed else Falsified("()", 0)
+  }
+
   /* Produce an infinite random stream from a `Gen` and a starting `RNG`. */
   def randomStream[A](g: Gen[A])(rng: RNG): Stream[A] =
     Stream.unfold(rng)(rng => Some(g.sample.run(rng)))
@@ -84,6 +93,32 @@ object Prop {
       s"generated an exception: ${e.getMessage}\n" +
       s"stack trace:\n ${e.getStackTrace.mkString("\n")}"
 
+  def equal[A](p: Par[A], p2: Par[A]): Par[Boolean] =
+    Par.map2(p,p2)(_ == _)
+
+  val S = weighted(
+    choose(1, 4).map(Executors.newFixedThreadPool) -> .75,
+    unit(Executors.newCachedThreadPool) -> .25
+  )
+
+  def forAllPar[A](g: Gen[A])(f: A => Par[Boolean]): Prop = forAll(S ** g){case (s, a) => f(a)(s).get}
+
+  def checkPar(p: Par[Boolean]): Prop =
+    forAllPar(Gen.unit(()))(_ => p)
+
+  val p2 = checkPar {
+    equal (Par.map(Par.unit(1))(_ + 1), Par.unit(2))
+  }
+
+  val pint = Gen.choose(0, 10) map (Par.unit(_))
+  val p4 = forAllPar(pint)(n => equal(Par.map(n)(y => y), n))
+
+  lazy val pint2: Gen[Par[Int]] = choose(-100,100).listOfN(choose(0,20)).map(l =>
+    l.foldLeft(Par.unit(0))((p,i) =>
+      Par.fork { Par.map2(p, Par.unit(i))(_ + _) }))
+
+  val forkPar = forAllPar(pint2)(n => equal(Par.fork(n), n)) tag "fork"
+
   def run(p: Prop,
           maxSize: Int = 100,
           testCases: Int = 100,
@@ -91,6 +126,7 @@ object Prop {
     p.run(maxSize, testCases, rng) match {
       case Falsified(msg, n) => println(s"! Falsified after $n passed tests:\n $msg")
       case Passed => println(s"+ OK, passed $testCases tests.")
+      case Proved => println(s"+ OK, proved property.")
     }
 }
 
@@ -108,6 +144,8 @@ case class Gen[+A](sample: State[RNG, A]) {
   def unsized: SGen[A] = SGen(s => this)
 
   def get(r: RNG): A = this.sample.run(r)._1
+
+  def **[B](g: Gen[B]): Gen[(A, B)] = (this map2 g)((_, _))
 }
 
 object Gen {
