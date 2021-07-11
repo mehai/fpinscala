@@ -21,58 +21,111 @@ object Monoid {
     val zero = Nil
   }
 
-  val intAddition: Monoid[Int] = ???
+  val intAddition: Monoid[Int] = new Monoid[Int] {
+    def op(a1: Int, a2: Int): Int = a1 + a2
+    val zero = 0
+  }
 
-  val intMultiplication: Monoid[Int] = ???
+  val intMultiplication: Monoid[Int] = new Monoid[Int] {
+    def op(a1: Int, a2: Int): Int = a1 * a2
+    def zero = 1
+  }
 
-  val booleanOr: Monoid[Boolean] = ???
+  val booleanOr: Monoid[Boolean] = new Monoid[Boolean] {
+    def op(a1: Boolean, a2: Boolean): Boolean = a1 || a2
+    def zero = false
+  }
 
-  val booleanAnd: Monoid[Boolean] = ???
+  val booleanAnd: Monoid[Boolean] = new Monoid[Boolean] {
+    def op(a1: Boolean, a2: Boolean): Boolean = a1 && a2
+    def zero = true
+  }
 
-  def optionMonoid[A]: Monoid[Option[A]] = ???
+  def optionMonoid[A]: Monoid[Option[A]] = new Monoid[Option[A]] {
+    override def op(a1: Option[A], a2: Option[A]): Option[A] = a1.orElse(a2)
+    override def zero: Option[A] = None
+  }
 
-  def endoMonoid[A]: Monoid[A => A] = ???
+  def endoMonoid[A]: Monoid[A => A] = new Monoid[A => A] {
+    override def op(a1: A => A, a2: A => A): A => A = a1 compose a2
 
-  // TODO: Placeholder for `Prop`. Remove once you have implemented the `Prop`
-  // data type from Part 2.
-  trait Prop {}
+    override def zero: A => A = a => a
+  }
 
-  // TODO: Placeholder for `Gen`. Remove once you have implemented the `Gen`
-  // data type from Part 2.
+  def dual[A](m: Monoid[A]): Monoid[A] = new Monoid[A] {
+    def op(x: A, y: A): A = m.op(y, x)
+    val zero = m.zero
+  }
 
   import fpinscala.testing._
   import Prop._
-  def monoidLaws[A](m: Monoid[A], gen: Gen[A]): Prop = ???
+  def monoidLaws[A](m: Monoid[A], gen: Gen[A]): Prop = {
+    val values = for {
+      x <- gen
+      y <- gen
+      z <- gen
+    } yield (x, y, z)
+    forAll(values)(p => m.op(m.op(p._1, p._2), p._3) == m.op(p._1, m.op(p._2, p._3))) &&
+      forAll(gen)(p => m.op(m.zero, p) == m.op(p, m.zero) && m.op(p, m.zero) == p)
+  }
 
   def trimMonoid(s: String): Monoid[String] = ???
 
   def concatenate[A](as: List[A], m: Monoid[A]): A =
-    ???
+    as.foldLeft(m.zero)(m.op)
 
   def foldMap[A, B](as: List[A], m: Monoid[B])(f: A => B): B =
-    ???
+    as.foldLeft(m.zero)((b, a) => m.op(b, f(a)))
 
-  def foldRight[A, B](as: List[A])(z: B)(f: (A, B) => B): B =
-    ???
+  def foldRight[A, B](as: List[A])(z: B)(f: (A, B) => B): B = {
+    val fCurried = f.curried
+    foldMap(as, endoMonoid[B])(fCurried)(z)
+  }
 
-  def foldLeft[A, B](as: List[A])(z: B)(f: (B, A) => B): B =
-    ???
+  def foldLeft[A, B](as: List[A])(z: B)(f: (B, A) => B): B = {
+    def fCurried(a: A)(b: B): B = f(b, a)
+    foldMap(as, dual(endoMonoid[B]))(fCurried)(z)
+  }
 
-  def foldMapV[A, B](as: IndexedSeq[A], m: Monoid[B])(f: A => B): B =
-    ???
+  def foldMapV[A, B](as: IndexedSeq[A], m: Monoid[B])(f: A => B): B = {
+    if (as.isEmpty)
+      m.zero
+    else if (as.length == 1)
+      f(as(0))
+    else {
+      val (asLeft, asRight) = as.splitAt(as.length / 2)
+      m.op(foldMapV(asLeft, m)(f), foldMapV(asRight, m)(f))
+    }
+  }
 
-  def ordered(ints: IndexedSeq[Int]): Boolean =
-    ???
+  def ordered(ints: IndexedSeq[Int]): Boolean = {
+    val m = new Monoid[Option[(Int, Int, Boolean)]] {
+      def op(a1: Option[(Int, Int, Boolean)], a2: Option[(Int, Int, Boolean)]): Option[(Int, Int, Boolean)] =
+        (a1, a2) match {
+          case (Some((x1, y1, p)), Some((x2, y2, q))) => Some(x1 min x2, y1 max y2, p && q && y1 <= x2)
+          case (None, x) => x
+          case (x, None) => x
+        }
+      def zero: Option[(Int, Int, Boolean)] = None
+    }
+    foldMapV(ints, m)(i => Some(i, i, true)).forall(_._3)
+  }
 
   sealed trait WC
   case class Stub(chars: String) extends WC
   case class Part(lStub: String, words: Int, rStub: String) extends WC
 
-  def par[A](m: Monoid[A]): Monoid[Par[A]] = 
-    ???
+  import fpinscala.parallelism.Nonblocking._
 
-  def parFoldMap[A,B](v: IndexedSeq[A], m: Monoid[B])(f: A => B): Par[B] = 
-    ???
+  def par[A](m: Monoid[A]): Monoid[Par[A]] = new Monoid[Par[A]] {
+    def zero = Par.unit(m.zero)
+    def op(a: Par[A], b: Par[A]) = a.map2(b)(m.op)
+  }
+
+  def parFoldMap[A,B](as: IndexedSeq[A], m: Monoid[B])(f: A => B): Par[B] =
+//    Par.parMap(as)(f).flatMap { bs =>
+//    foldMapV(bs, par(m))(b => Par.async(b))
+//  }
 
   val wcMonoid: Monoid[WC] = ???
 

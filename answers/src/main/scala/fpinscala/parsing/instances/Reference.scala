@@ -1,5 +1,4 @@
-package fpinscala
-package parsing
+package fpinscala.parsing.instances
 
 import ReferenceTypes._
 import scala.util.matching.Regex

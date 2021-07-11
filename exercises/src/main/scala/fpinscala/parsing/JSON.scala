@@ -1,6 +1,5 @@
 package fpinscala.parsing
 
-import language.higherKinds
 import language.implicitConversions
 
 trait JSON
@@ -14,10 +13,8 @@ object JSON {
   case class JObject(get: Map[String, JSON]) extends JSON
 
   def jsonParser[Parser[+_]](P: Parsers[Parser]): Parser[JSON] = {
-    // we'll hide the string implicit conversion and promote strings to tokens instead
-    // this is a bit nicer than having to write token everywhere
     import P.{string => _, _}
-    implicit def tok(s: String) = token(P.string(s))
+    implicit def tok(s: String): Parser[String] = token(P.string(s))
 
     def value: Parser[JSON] = lit | obj | array
 
@@ -25,7 +22,7 @@ object JSON {
       value sep "," map (vs => JArray(vs.toIndexedSeq))) scope "array"
     def obj = surround("{","}")(
       keyval sep "," map (kvs => JObject(kvs.toMap))) scope "object"
-    def keyval = escapedQuoted ** (":" *> value)
+    def keyval: Parser[(String, JSON)] = escapedQuoted ** (":" *> value)
     def lit = scope("literal") {
       "null".as(JNull) |
       double.map(JNumber(_)) |
@@ -36,11 +33,9 @@ object JSON {
 
     root(whitespace *> (obj | array))
   }
+
 }
 
-/**
- * JSON parsing example.
- */
 object JSONExample extends App {
   val jsonTxt = """
 {
@@ -80,4 +75,5 @@ object JSONExample extends App {
   printResult { P.run(json)(malformedJson1) }
   println("--")
   printResult { P.run(json)(malformedJson2) }
+
 }
