@@ -2,6 +2,8 @@ package fpinscala.localeffects
 
 import fpinscala.monads._
 
+import scala.collection.mutable
+
 object Mutable {
   def quicksort(xs: List[Int]): List[Int] = if (xs.isEmpty) xs else {
     val arr = xs.toArray
@@ -98,7 +100,10 @@ sealed abstract class STArray[S,A](implicit manifest: Manifest[A]) {
   // Turn the array into an immutable list
   def freeze: ST[S,List[A]] = ST(value.toList)
 
-  def fill(xs: Map[Int,A]): ST[S,Unit] = ???
+  def fill(xs: Map[Int,A]): ST[S,Unit] =
+    xs.toList.foldRight(ST[S, Unit](())){
+      case ((k, v), st) => st flatMap (_ => write(k, v))
+    }
 
   def swap(i: Int, j: Int): ST[S,Unit] = for {
     x <- read(i)
@@ -124,9 +129,47 @@ object STArray {
 object Immutable {
   def noop[S] = ST[S,Unit](())
 
-  def partition[S](a: STArray[S,Int], l: Int, r: Int, pivot: Int): ST[S,Int] = ???
+  /*
+  * def partition(l: Int, r: Int, pivot: Int) = {
+      val pivotVal = arr(pivot)
+      swap(pivot, r)
+      var j = l
+      for (i <- l until r) if (arr(i) < pivotVal) {
+        swap(i, j)
+        j += 1
+      }
+      swap(j, r)
+      j
+    }
+    def qs(l: Int, r: Int): Unit = if (l < r) {
+      val pi = partition(l, r, l + (r - l) / 2)
+      qs(l, pi - 1)
+      qs(pi + 1, r)
+    }
+  * */
 
-  def qs[S](a: STArray[S,Int], l: Int, r: Int): ST[S, Unit] = ???
+  def partition[S](a: STArray[S,Int], l: Int, r: Int, pivot: Int): ST[S,Int] = for {
+    pivotVal <- a.read(pivot)
+    _ <- a.swap(pivot, r)
+    j <- STRef(l)
+    _ <- (l until r).foldLeft(noop[S])((z, index) => for {
+      _ <- z
+      arr_i <- a.read(index)
+      _ <- if (arr_i < pivotVal) for {
+        jIndex <- j.read
+        _ <- a.swap(index, jIndex)
+        _ <- j.write(jIndex + 1)
+      } yield (()) else noop[S]
+    } yield (()))
+    jIndex <- j.read
+    _ <- a.swap(jIndex, r)
+  } yield j
+
+  def qs[S](a: STArray[S,Int], l: Int, r: Int): ST[S, Unit] = if (l < r) for {
+    pi <- partition(a, l, r, l + (r - l) / 2)
+    _ <- qs(a, l, pi - 1)
+    _ <- qs(a, pi + 1, r)
+  } yield (()) else noop[S]
 
   def quicksort(xs: List[Int]): List[Int] =
     if (xs.isEmpty) xs else ST.runST(new RunnableST[List[Int]] {
@@ -141,3 +184,57 @@ object Immutable {
 
 import scala.collection.mutable.HashMap
 
+sealed abstract class STHashMap[S,K,V](implicit manifest: Manifest[(K, V)]) {
+  protected def value: mutable.HashMap[K, V]
+  def size: ST[S,Int] = ST(value.size)
+
+  // Write a value at the give index of the array
+  def write(k: K, a: V): ST[S,Unit] = new ST[S,Unit] {
+    def run(s: S) = {
+      value(k) = a
+      ((), s)
+    }
+  }
+
+  // Read the value at the given index of the array
+  def read(k: K): ST[S,V] = ST(value(k))
+
+  // Turn the array into an immutable list
+  def freeze: ST[S,List[(K, V)]] = ST(value.toList)
+}
+
+object STHashMap {
+  // Construct an array of the given size filled with the value v
+  def apply[S,K,V:Manifest](lst: List[(K, V)]): ST[S, STHashMap[S,K,V]] =
+    ST(new STHashMap[S,K,V] {
+      lazy val value = mutable.HashMap.from(lst)
+    })
+}
+
+sealed trait STMap[S,K,V] {
+  protected def table: HashMap[K,V]
+
+  def size: ST[S,Int] = ST(table.size)
+
+  // Get the value under a key
+  def apply(k: K): ST[S,V] = ST(table(k))
+
+  // Get the value under a key, or None if the key does not exist
+  def get(k: K): ST[S, Option[V]] = ST(table.get(k))
+
+  // Add a value under a key
+  def +=(kv: (K, V)): ST[S,Unit] = ST(table += kv)
+
+  // Remove a key
+  def -=(k: K): ST[S,Unit] = ST(table -= k)
+}
+
+object STMap {
+  def empty[S,K,V]: ST[S, STMap[S,K,V]] = ST(new STMap[S,K,V] {
+    val table = HashMap.empty[K,V]
+  })
+
+  def fromMap[S,K,V](m: Map[K,V]): ST[S, STMap[S,K,V]] = ST(new STMap[S,K,V] {
+    val table = (HashMap.newBuilder[K,V] ++= m).result
+  })
+}
