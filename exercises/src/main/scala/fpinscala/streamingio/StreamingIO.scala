@@ -136,7 +136,15 @@ object SimpleStreamTransducers {
     /*
      * Exercise 5: Implement `|>`. Let the types guide your implementation.
      */
-    def |>[O2](p2: Process[O,O2]): Process[I,O2] = ???
+    def |>[O2](p2: Process[O,O2]): Process[I,O2] = p2 match {
+      case Halt() => Halt()
+      case Emit(h,t) => Emit(h, this |> t)
+      case Await(f) => this match {
+        case Emit(h,t) => t |> f(Some(h))
+        case Halt() => Halt[I,O]() |> f(None)
+        case Await(g) => Await((i: Option[I]) => g(i) |> p2)
+      }
+    }
 
     /*
      * Feed `in` to this `Process`. Uses a tail recursive loop as long
@@ -200,7 +208,7 @@ object SimpleStreamTransducers {
     /*
      * Exercise 6: Implement `zipWithIndex`.
      */
-    def zipWithIndex: Process[I,(O,Int)] = ???
+    def zipWithIndex: Process[I,(O,Int)] = zip(this, count)
 
     /* Add `p` to the fallback branch of this process */
     def orElse(p: Process[I,O]): Process[I,O] = this match {
@@ -292,13 +300,14 @@ object SimpleStreamTransducers {
     /*
      * Exercise 1: Implement `take`, `drop`, `takeWhile`, and `dropWhile`.
      */
-    def take[I](n: Int): Process[I,I] = ???
+    def take[I](n: Int): Process[I,I] = if (n <= 0) Halt() else await(d => emit(d, take(n - 1)))
 
-    def drop[I](n: Int): Process[I,I] = ???
+    def drop[I](n: Int): Process[I,I] = if (n <= 0) id else await(_ => drop[I](n - 1))
 
-    def takeWhile[I](f: I => Boolean): Process[I,I] = ???
+    def takeWhile[I](f: I => Boolean): Process[I,I] = await(d => if (f(d)) emit(d, takeWhile(f)) else Halt())
 
-    def dropWhile[I](f: I => Boolean): Process[I,I] = ???
+    def dropWhile[I](f: I => Boolean): Process[I,I] =
+      await(d => if (f(d)) dropWhile(f) else emit(d, id))
 
     /* The identity `Process`, just repeatedly echos its input. */
     def id[I]: Process[I,I] = lift(identity)
@@ -306,7 +315,10 @@ object SimpleStreamTransducers {
     /*
      * Exercise 2: Implement `count`.
      */
-    def count[I]: Process[I,Int] = ???
+    def count[I]: Process[I,Int] = {
+      def recCount(c: Int): Process[I, Int] = await(_ => emit(c, recCount(c + 1)))
+      recCount(0)
+    }
 
     /* For comparison, here is an explicit recursive implementation. */
     def count2[I]: Process[I,Int] = {
@@ -318,7 +330,11 @@ object SimpleStreamTransducers {
     /*
      * Exercise 3: Implement `mean`.
      */
-    def mean: Process[Double,Double] = ???
+    def mean: Process[Double,Double] = {
+      def recMean(c: Int, sum: Double): Process[Double, Double] =
+        await(d => emit((sum + d) / c, recMean(c + 1, sum + d)))
+      recMean(1, 0.0)
+    }
 
     def loop[S,I,O](z: S)(f: (I,S) => (O,S)): Process[I,O] =
       await((i: I) => f(i,z) match {
@@ -327,15 +343,26 @@ object SimpleStreamTransducers {
 
     /* Exercise 4: Implement `sum` and `count` in terms of `loop` */
 
-    def sum2: Process[Double,Double] = ???
+    def sum2: Process[Double,Double] = loop(0.0)((i, s) => (s + i, s + i))
 
-    def count3[I]: Process[I,Int] = ???
+    def count3[I]: Process[I,Int] = loop(0)((_, c) => (c, c + 1))
 
     /*
      * Exercise 7: Can you think of a generic combinator that would
      * allow for the definition of `mean` in terms of `sum` and
      * `count`?
      */
+    def zip[A,B,C](p1: Process[A,B], p2: Process[A,C]): Process[A,(B,C)] =
+      (p1, p2) match {
+        case (Halt(), _) => Halt()
+        case (_, Halt()) => Halt()
+        case (Emit(b, t1), Emit(c, t2)) => Emit((b,c), zip(t1, t2))
+        case (Await(recv1), _) =>
+          Await((oa: Option[A]) => zip(recv1(oa), feed(oa)(p2)))
+        case (_, Await(recv2)) =>
+          Await((oa: Option[A]) => zip(feed(oa)(p1), recv2(oa)))
+      }
+
 
     def feed[A,B](oa: Option[A])(p: Process[A,B]): Process[A,B] =
       p match {
@@ -356,7 +383,7 @@ object SimpleStreamTransducers {
      * We choose to emit all intermediate values, and not halt.
      * See `existsResult` below for a trimmed version.
      */
-    def exists[I](f: I => Boolean): Process[I,Boolean] = ???
+    def exists[I](f: I => Boolean): Process[I,Boolean] = loop(false)((d, bool) => (bool || f(d), bool || f(d)))
 
     /* Awaits then emits a single value, then halts. */
     def echo[I]: Process[I,I] = await(i => emit(i))
